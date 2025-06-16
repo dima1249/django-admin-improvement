@@ -7,3 +7,9 @@ class Timesheet(models.Model):
 
     def __str__(self):
         return f"{self.date} - {self.time}"
+
+
+
+class TimeDesc(models.Model):
+    name  = models.CharField(max_length=20, null=True, blank=True)
+
