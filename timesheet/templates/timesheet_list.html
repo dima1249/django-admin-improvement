@@ -1,0 +1,440 @@
+    {% extends 'admin/base_site.html' %}
+    {% load static %}
+    {% load timesheet_extras %}
+
+    {% block extrastyle %}
+        {{ block.super }}
+        <link rel="stylesheet" type="text/css" href="{% static 'timesheet/styles.css' %}">
+        <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+        <style>
+            .success-message {
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background-color: #4CAF50;
+                color: white;
+                padding: 15px;
+                border-radius: 4px;
+                z-index: 1000;
+            }
+            
+            #timesheetTable {
+                width: 100%;
+                border-collapse: collapse;
+                margin-top: 20px;
+            }
+            #timesheetTable th, #timesheetTable td {
+                border: 1px solid #ddd;
+                padding: 8px;
+                text-align: left;
+            }
+            #timesheetTable th {
+                background-color: black;
+            }
+            #loadTimesheetBtn {
+                margin: 20px 0;
+                padding: 10px 20px;
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                cursor: pointer;
+            }
+            #loadTimesheetBtn:hover {
+                background-color: #45a049;
+            }
+
+
+            #loading-overlay {
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100vw;
+                height: 100vh;
+                background-color: rgba(255, 255, 255, 0.7);
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                z-index: 9999;
+            }
+            .spinner {
+                border: 8px solid #f3f3f3;
+                border-top: 8px solid #3498db;
+                border-radius: 50%;
+                width: 60px;
+                height: 60px;
+                animation: spin 1s linear infinite;
+            }
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+            .spinner-container {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .spinner {
+                border: 12px solid #f3f3f3;
+                border-top: 12px solid #3498db;
+                border-radius: 50%;
+                width: 80px;
+                height: 80px;
+                animation: spin 1s linear infinite;
+                margin-bottom: 10px;
+            }
+
+            .loading-text {
+                font-size: 18px;
+                font-weight: bold;
+                color: #333;
+                font-family: sans-serif;
+                animation: pulse 1.5s infinite;
+            }
+
+            @keyframes spin {
+                0% { transform: rotate(0deg); }
+                100% { transform: rotate(360deg); }
+            }
+
+            @keyframes pulse {
+                0% { opacity: 1; }
+                50% { opacity: 0.5; }
+                100% { opacity: 1; }
+            }
+
+
+        </style>
+    {% endblock %}
+
+    {% block content %}
+
+    <div id="loading-overlay" style="display: none;">
+    <div class="spinner-container">
+        <div class="spinner"></div>
+        <div class="loading-text">Loading...</div>
+    </div>
+    </div>
+
+    
+    <div class="calendar-header">
+        <div class="calendar-controls">
+            <button onclick="prevPeriod()">&#8592;</button>
+            <span id="calendar-date-range">2025 оны 6-р сар</span>
+            <button onclick="nextPeriod()">&#8594;</button>
+        </div>
+        <div class="calendar-view-switch">
+            <button id="weekly-btn" class="active" onclick="setView('weekly')">Weekly</button>
+            <button id="daily-btn" onclick="setView('daily')">Daily</button>
+            <button id="monthly-btn" onclick="setView('monthly')">Monthly</button>
+        </div>
+    </div>
+    <h2>Цагийн бүртгэл</h2>
+
+    <button id="loadTimesheetBtn">Цагийн бүртгэл харах</button>
+    <div id="timesheetData"></div>
+
+    <!-- WEEKLY TABLE -->
+    <table id="weekly-table">
+        <tr>
+            <th></th>
+            {% for day in days %}
+                <th>{{ day }}</th>
+            {% endfor %}
+        </tr>
+        {% for time in times %}
+        <tr>
+            <td class="time-col">{{ time }}</td>
+            {% for day in days %}
+                {% with ts=timesheet_map|dict_get:day|dict_get:time %}
+                    {% if ts %}
+                        <td class="filled" onclick="window.location.href='/admin/timesheet/timesheet/{{ ts.id }}/change/'">
+                            ✔<br>
+                            <span style="font-size:12px;">{{ ts.date }}<br>{{ ts.time|slice:':5' }}</span>
+                        </td>
+                    {% else %}
+                        <td class="timesheet-cell" data-day="{{ day }}" data-time="{{ time }}" onclick="addTimesheet(this)"></td>
+                    {% endif %}
+                {% endwith %}
+            {% endfor %}
+        </tr>
+        {% endfor %}
+    </table>
+
+    <!-- DAILY TABLE -->
+    <table id="daily-table" style="display:none;">
+        <tr>
+            <th></th>
+            <th id="daily-day-header">{{ today_day }}</th>
+        </tr>
+        {% for time in times %}
+        <tr>
+            <td class="time-col">{{ time }}</td>
+            {% with ts=timesheet_map|dict_get:today_day|dict_get:time %}
+                {% if ts %}
+                    <td class="filled daily-cell" data-day="{{ today_day }}" data-time="{{ time }}" data-id="{{ ts.id }}" data-date="{{ ts.date }}" data-timeval="{{ ts.time }}" onclick="window.location.href='/admin/timesheet/timesheet/{{ ts.id }}/change/'">
+                        ✔<br>
+                        <span style="font-size:12px;">{{ ts.date }}<br>{{ ts.time|slice:':5' }}</span>
+                    </td>
+                {% else %}
+                    <td class="daily-cell" data-day="{{ today_day }}" data-time="{{ time }}" onclick="submitTimesheetAJAX('{{ today_day }}', '{{ time }}')"></td>
+                {% endif %}
+            {% endwith %}
+        </tr>
+        {% endfor %}
+    </table>
+
+    <script>
+    function submitTimesheetAJAX(day, time) {
+        const daysMap = { 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 0 };
+        const today = new Date();
+        const targetDayIndex = daysMap[day];
+        const todayDayIndex = today.getDay();
+        let diff = targetDayIndex - todayDayIndex;
+        if (diff < 0) diff += 7;
+        const targetDate = new Date(today);
+        targetDate.setDate(today.getDate() + diff);
+        const dateStr = targetDate.toISOString().split('T')[0];
+
+        let formattedTime = time;
+        if (time.length === 5) {
+            formattedTime += ':00';
+        }
+
+        const csrftoken = getCookie('csrftoken');
+
+        const cell = document.querySelector(`[data-day='${day}'][data-time='${time}']`);
+        if (cell.classList.contains('loading')) return; // давхар дарахаас сэргийлэх ali hedin darsan bol ahij dargdhgui 
+                                                                 //olon udaa darhad dahin dahin ajax ywulahgu
+
+        cell.classList.add('loading');
+
+        // Loading spinner-г delay-тайгаар харуулах
+        const loadingTimeout = setTimeout(() => {
+            document.getElementById('loading-overlay').style.display = 'flex'; // server udan unshwal loading haragdhgui udaan huleevel garj irne
+        }, 300); // 0.3 секунд хүлээж байж spinner харуулна
+
+        $.ajax({
+            url: '/api/timesheet/create/',
+            method: 'POST',
+            timeout: 5000, // 5 секундээс удаан бол timeout ajax 5secd serveres hariu awhgu bol huseltig automatar tsutsln
+            headers: {
+                'X-CSRFToken': csrftoken,
+                'Content-Type': 'application/json'
+            },
+            data: JSON.stringify({
+                date: dateStr,
+                time: formattedTime,
+                employee: 'Employee'
+            }),
+            success: function(response) {
+                clearTimeout(loadingTimeout);
+                cell.classList.remove('loading');
+
+                if (response.success) {
+                    const weeklyCell = document.querySelector(`#weekly-table [data-day='${response.day}'][data-time='${time}']`);
+                    const dailyCell = document.querySelector(`#daily-table [data-day='${response.day}'][data-time='${time}']`);
+
+                    const newContent = `✔<br><span style='font-size:12px;'>${response.date}<br>${time}</span>`;
+
+                    [weeklyCell, dailyCell].forEach(function(cellItem) {
+                        if (cellItem) {
+                            cellItem.classList.add('filled');
+                            cellItem.innerHTML = newContent;
+                            cellItem.onclick = function() {
+                                window.location.href = `/admin/timesheet/timesheet/${response.id}/change/`;
+                            };
+                        }
+                    });
+
+                    const successMsg = $('<div class="success-message">Амжилттай хадгалагдлаа!</div>');
+                    $('body').append(successMsg);
+                    setTimeout(() => {
+                        successMsg.fadeOut(300, function() {
+                            $(this).remove();
+                        });
+                    }, 2000);
+                } else {
+                    alert('Алдаа гарлаа: ' + response.message);
+                    if (cell) cell.innerHTML = '';
+                }
+            },
+            error: function(xhr, status, error) {
+                clearTimeout(loadingTimeout);
+                cell.classList.remove('loading');
+
+                if (status === 'timeout') {
+                    alert('Хүсэлт хэт удаан байна. Дахин оролдоно уу.'); //ymr negen ajax huselt amjiltgui ajillhd duudagdana
+                } else {
+                    alert('Алдаа гарлаа: ' + error);
+                }
+
+                if (cell) {
+                    cell.innerHTML = '';
+                }
+            }
+        });
+    }
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+
+
+        function setView(view) {
+            document.getElementById('weekly-btn').classList.remove('active');
+            document.getElementById('daily-btn').classList.remove('active');
+            document.getElementById('monthly-btn').classList.remove('active');
+            document.getElementById(view + '-btn').classList.add('active');
+            if (view === 'weekly') {
+                document.getElementById('weekly-table').style.display = '';
+                document.getElementById('daily-table').style.display = 'none';
+            } else if (view === 'daily') {
+                document.getElementById('weekly-table').style.display = 'none';
+                document.getElementById('daily-table').style.display = '';
+            } else {
+                // Monthly view logic (optional)
+                alert('Monthly view not implemented');
+            }
+        }
+
+        function prevPeriod() {
+            alert('Previous period (backend logic required)');
+        }
+
+        function nextPeriod() {
+            alert('Next period (backend logic required)');
+        }
+
+        function goToAddPage(day, time) {
+            const daysMap = { 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 0 };
+            const today = new Date();
+            const targetDayIndex = daysMap[day];
+            const todayDayIndex = today.getDay();
+            let diff = targetDayIndex - todayDayIndex;
+            if (diff < 0) diff += 7;
+            const targetDate = new Date(today);
+            targetDate.setDate(today.getDate() + diff);
+            const dateStr = targetDate.toISOString().split('T')[0];
+
+            const url = `/admin/timesheet/timesheet/add/?date=${dateStr}&time=${time}`;
+            window.location.href = url;
+        }
+
+        function addTimesheet(cell) {
+            const day = cell.getAttribute('data-day');
+            const time = cell.getAttribute('data-time');
+            
+            const daysMap = { 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6, 'Sun': 0 };
+            const today = new Date();
+            const targetDayIndex = daysMap[day];
+            const todayDayIndex = today.getDay();
+            let diff = targetDayIndex - todayDayIndex;
+            if (diff < 0) diff += 7;
+            const targetDate = new Date(today);
+            targetDate.setDate(today.getDate() + diff);
+            const dateStr = targetDate.toISOString().split('T')[0];
+
+            let formattedTime = time;
+            if (time.length === 5) {
+                formattedTime += ':00';
+            }
+
+            if (cell.classList.contains('loading')) return;
+
+            // Loading indicator харуулах
+            const loadingTimeout = setTimeout(() => {
+                document.getElementById('loading-overlay').style.display = 'flex';
+            }, 300);
+
+            $.ajax({
+                url: '/api/timesheet/create/',
+                method: 'POST',
+                timeout: 5000,
+                headers: {
+                    'X-CSRFToken': getCookie('csrftoken'),
+                    'Content-Type': 'application/json'
+                },
+                data: JSON.stringify({
+                    date: dateStr,
+                    time: formattedTime,
+                    employee: 'Employee'
+                }),
+                success: function(response) {
+                    clearTimeout(loadingTimeout);
+                    document.getElementById('loading-overlay').style.display = 'none';
+
+                    if (response.success) {
+                        // Нүдний агуулгыг шинэчлэх
+                        cell.classList.add('filled');
+                        cell.innerHTML = `✔<br><span style='font-size:12px;'>${response.date}<br>${time}</span>`;
+                        
+                        // Click event-ийг шинэчлэх
+                        cell.onclick = function() {
+                            window.location.href = `/admin/timesheet/timesheet/${response.id}/change/`;
+                        };
+
+                        // Амжилттай гэсэн мессежийг харуулах
+                        const successMsg = $('<div class="success-message">Амжилттай хадгалагдлаа!</div>');
+                        $('body').append(successMsg);
+                        setTimeout(() => {
+                            successMsg.fadeOut(300, function() {
+                                $(this).remove();
+                            });
+                        }, 2000);
+                    } else {
+                        alert('Алдаа гарлаа: ' + response.message);
+                        cell.innerHTML = '';
+                    }
+                },
+                error: function(xhr, status, error) {
+                    clearTimeout(loadingTimeout);
+                    document.getElementById('loading-overlay').style.display = 'none';
+
+                    if (status === 'timeout') {
+                        alert('Хүсэлт хэт удаан байна. Дахин оролдоно уу.');
+                    } else {
+                        console.error('Error:', error);
+                        alert('Алдаа гарлаа: ' + error);
+                    }
+                    cell.innerHTML = '';
+                }
+            });
+        }
+
+        $(document).ready(function() {
+            $("#loadTimesheetBtn").click(function() {
+                $.ajax({
+                    url: "http://127.0.0.1:8000/api/timesheet/",
+                    method: "GET",
+                    success: function(result) {
+                        let html = "<table id='timesheetTable'><tr><th>Огноо</th><th>Цаг</th><th>Ажилтан</th></tr>";
+                        result.forEach(item => {
+                            html += `<tr><td>${item.date}</td><td>${item.time}</td><td>${item.employee}</td></tr>`;
+                        });
+                        html += "</table>";
+                        $("#timesheetData").html(html);
+                    },
+                    error: function(xhr, status, error) {
+                        $("#timesheetData").html("Алдаа гарлаа: " + error);
+
+                    }
+                });
+            });
+        });
+    </script>
+    {% endblock %}
